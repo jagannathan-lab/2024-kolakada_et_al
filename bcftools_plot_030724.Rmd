@@ -1,0 +1,539 @@
+```{r}
+library(tidyverse)
+library(cowplot)
+```
+
+```{r}
+# after :
+# filter vcf to stop_gained
+# bcftools conversion of fields to table
+# codon info via bedtools 
+
+table2 <- read_tsv("codons.tsv", col_names = c("transcript_id", NA, NA, NA, NA, NA, NA, NA, NA, "chrom", "pos", "ref", "alt", "count", "freq", "popmax", "total", "nhomalt", "filter", "gene", "gene_id", "transcript_id", "strand", "codon", "conseq", "cdna_site", "cds_site", "rf_tp_probability", "FS", "InbreedingCoeff", "MQ", "MQRankSum", "QD", "ReadPosRankSum", "SOR", "BaseQRankSum", "ClippingRankSum", "DP", "VQSLOD", "VQSR_culprit","orig_start", "orig_end", "orig.codon", "minus1", "plus1")) %>% select(-starts_with("X")) %>% mutate(stop_s = str_to_upper(str_sub(codon, -3)))
+
+# only keep one transcript annotation for each cases
+full2 <- table2 %>% distinct(chrom, pos, alt, stop_s, minus1, filter,.keep_all = T) 
+
+# also remove cases that can result in different codon context depending on transcript
+full_vague <- full2 %>% group_by(chrom, pos, alt) %>% summarize(n = n()) %>% filter(n > 1)
+full3 <- anti_join(full2, full_vague) %>% filter(count > 0)
+
+# make sure cases pass gnomad random forest filter
+full_pass <- full3 %>% filter(filter == "PASS") %>% mutate(popmax = as.numeric(popmax))
+```
+
+```{r}
+# codon frequency of last 10 codons in normal stop context
+last10 <- readRDS("last10_norm") %>% mutate(codon = as.character(codon))
+```
+
+```{r}
+t1 <- full_pass %>%
+  filter(!(minus1 %in% c("TAA","TAG","TGA")),
+         conseq == "stop_gained",
+         popmax <= 0.01,
+         stop_s %in% c("TAA","TAG","TGA")) %>%
+  group_by(minus1) %>%
+  summarise(n = sum(freq)) %>%
+  mutate(n = n/sum(n)) %>% 
+  left_join(last10, by = c("minus1" = "codon")) %>% 
+  group_by(aa) %>% 
+  summarize(n.x = sum(n.x), per = sum(per)) %>% 
+  mutate(ratio = n.x/per) %>%  
+  arrange(desc(ratio))
+
+g <- ggplot(t1 %>% arrange(desc(ratio)), aes(y = aa, x = ratio, label = aa)) + 
+  geom_segment(aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t1 %>% filter(aa %in% c("G"))), aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t1 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=12,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete(limits=c("", (t1 %>% arrange(desc(ratio)))$aa)) + 
+  scale_x_continuous(limits = c(0.5, 1.5)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, -1 PTC") 
+
+ggsave("ptc_tall.pdf", g, height = 5.5, width = 4, useDingbats=FALSE)
+```
+
+```{r D}
+lof <- read_tsv(gzfile("gnomad.v2.1.1.lof_metrics.by_gene.txt.bgz")) 
+
+t3 <- inner_join(ptc %>% filter(filter == "PASS") %>% mutate(freq = as.numeric(freq)) %>% ungroup(),
+                 lof, 
+                 by = c("gene.x" = "gene")) %>% left_join(last10, by = c("minus1" = "codon"))
+t3_hi <- t3 %>% filter(oe_lof > 0.66)
+t3_mid <- t3 %>% filter(oe_lof <= 0.66 & oe_lof >= 0.35)
+t3_low <- t3 %>% filter(oe_lof < 0.35)
+
+t1 <- t3_hi %>% filter(!(minus1 %in% c("TAA","TAG","TGA")), conseq == "stop_gained", popmax <= 0.01, stop_s %in% c("TAA","TAG","TGA")) %>% group_by(minus1) %>% summarise(n = sum(freq)) %>% mutate(n = n/sum(n)) %>% left_join(last10, by = c("minus1" = "codon")) %>% group_by(aa) %>% summarize(n.x = sum(n.x), per = sum(per)) %>% mutate(ratio = n.x/per) %>%  arrange(desc(ratio))
+t2 <- t3_mid %>% filter(!(minus1 %in% c("TAA","TAG","TGA")), conseq == "stop_gained", popmax <= 0.01, stop_s %in% c("TAA","TAG","TGA")) %>% group_by(minus1) %>% summarise(n = sum(freq)) %>% mutate(n = n/sum(n)) %>% left_join(last10, by = c("minus1" = "codon")) %>% group_by(aa) %>% summarize(n.x = sum(n.x), per = sum(per)) %>% mutate(ratio = n.x/per) %>%  arrange(desc(ratio))
+t3 <- t3_low %>% filter(!(minus1 %in% c("TAA","TAG","TGA")), conseq == "stop_gained", popmax <= 0.01, stop_s %in% c("TAA","TAG","TGA")) %>% group_by(minus1) %>% summarise(n = sum(freq)) %>% mutate(n = n/sum(n)) %>% left_join(last10, by = c("minus1" = "codon")) %>% group_by(aa) %>% summarize(n.x = sum(n.x), per = sum(per)) %>% mutate(ratio = n.x/per) %>%  arrange(desc(ratio))
+
+g1 <- ggplot(t1 %>% arrange(desc(ratio)), aes(y = aa, x = ratio, label = aa)) + 
+  geom_segment(aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t3 %>% filter(aa %in% c("G"))), aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t1 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=10,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete(limits=c("", (t1 %>% arrange(desc(ratio)))$aa)) + 
+  scale_x_continuous(limits = c(0.5, 1.5)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, -1 PTC")  +
+  ggtitle("LoF > 0.66")
+g2 <- ggplot(t2 %>% arrange(desc(ratio)), aes(y = aa, x = ratio, label = aa)) + 
+  geom_segment(aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t3 %>% filter(aa %in% c("G"))), aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t2 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=10,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete(limits=c("", (t2 %>% arrange(desc(ratio)))$aa)) + 
+  scale_x_continuous(limits = c(0.5, 1.5)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, -1 PTC")  +
+  ggtitle("0.66 >= LoF >= 0.35")
+g3 <- ggplot(t3 %>% arrange(desc(ratio)), aes(y = aa, x = ratio, label = aa)) + 
+  geom_segment(aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t3 %>% filter(aa %in% c("G"))), aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t3 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=10,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete(limits=c("", (t3 %>% arrange(desc(ratio)))$aa)) + 
+  scale_x_continuous(limits = c(0.5, 1.55)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, -1 PTC")  +
+  ggtitle("LoF < 0.35")
+cowplot::plot_grid(g1, g2, g3, nrow = 1)
+
+ggsave("lofs_tall.pdf", height = 5.5, width = 6.5, useDingbats=FALSE)
+```
+
+```{r}
+# normal stops, isoforms predicted to not undergo nmd
+tbl_stop_nonnmdiso_p <- readRDS("tbl_stop_nonnmdiso_p")
+t1 <- tbl_stop_nonnmdiso_p %>% filter(!(minus1 %in% c("TAA","TAG","TGA"))) %>% group_by(minus1) %>% summarise(n = n()) %>% mutate(n = n/sum(n)) %>% left_join(last10, by = c("minus1" = "codon")) %>% group_by(aa) %>% summarize(n.x = sum(n.x), per = sum(per)) %>% mutate(ratio = n.x/per) %>% arrange(desc(ratio))
+g <- ggplot(t1 %>% arrange(desc(ratio)), aes(y = aa, x = ratio, label = aa)) + 
+  geom_segment(aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t1 %>% filter(aa %in% c("G"))), aes(yend = aa, xend = 1, x = ifelse(ratio > 1.025, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t1 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=12,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete(limits=c("", (t1 %>% arrange(desc(ratio)))$aa)) + 
+  scale_x_continuous(limits = c(0.5, 1.5)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, -1 non_nmd NTC")
+ggsave("nonnmd_normal_tall.pdf", g, height = 5.5, width = 4, useDingbats=FALSE)
+```
+
+```{r}
+# normal stops, isoforms predicted to undergo nmd
+tbl_stop_nmdiso_p <- readRDS("tbl_stop_nmdiso_p")
+t1 <- tbl_stop_nmdiso_p %>% filter(!(minus1 %in% c("TAA","TAG","TGA"))) %>% group_by(minus1) %>% summarise(n = n()) %>% mutate(n = n/sum(n)) %>% left_join(last10, by = c("minus1" = "codon")) %>% group_by(aa) %>% summarize(n.x = sum(n.x), per = sum(per)) %>% mutate(ratio = n.x/per) %>% arrange(desc(ratio))
+g <- ggplot(t1 %>% arrange(desc(ratio)), aes(y = aa, x = ratio, label = aa)) + 
+  geom_segment(aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t1 %>% filter(aa %in% c("G"))), aes(yend = aa, xend = 1, x = ifelse(ratio > 1.025, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t1 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=12,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete(limits=c("", (t1 %>% arrange(desc(ratio)))$aa)) + 
+  scale_x_continuous(limits = c(0.5, 1.7)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, -1 nmd NTC")
+ggsave("nmd_normal_tall.pdf", g, height = 5.5, width = 4, useDingbats=FALSE)
+```
+
+```{r}
+t1 <- full_pass %>%
+  filter(!(minus1 %in% c("TAA","TAG","TGA")),
+         conseq == "stop_gained",
+         popmax <= 0.01,
+         stop_s %in% c("TAA","TAG","TGA")) %>%
+  group_by(minus1) %>%
+  summarise(n = sum(freq)) %>%
+  mutate(n = n/sum(n)) %>% 
+  left_join(last10, by = c("minus1" = "codon")) %>% 
+  group_by(aa) %>% 
+  summarize(n.x = sum(n.x), per = sum(per)) %>% 
+  mutate(ratio = n.x/per) %>%  
+  arrange(desc(ratio))
+
+t2 <- tbl_stop_nonnmdiso_p %>% filter(!(minus1 %in% c("TAA","TAG","TGA"))) %>% group_by(minus1) %>% summarise(n = n()) %>% mutate(n = n/sum(n)) %>% left_join(last10, by = c("minus1" = "codon")) %>% group_by(aa) %>% summarize(n.x = sum(n.x), per = sum(per)) %>% mutate(ratio = n.x/per) %>% arrange(desc(ratio))
+
+t4 <- full_join(t1, t2, by = "aa") %>% mutate(ratio = log2(ratio.x / ratio.y))
+
+g <- ggplot(t4 %>% arrange(desc(ratio)), aes(y = aa, x = ratio, label = aa)) + 
+  geom_segment(aes(yend = aa, xend = 0, x = ifelse(ratio > 0.01, ratio - 0.01, ifelse(ratio < -0.1, ratio + 0.01, 0)))) +
+  geom_segment(data =  (t4 %>% filter(aa %in% c("G"))), aes(yend = aa, xend = 0, x = ifelse(ratio > 0.01, ratio - 0.01, ifelse(ratio < -0.01, ratio + 0.01, 0))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t4 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=12,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete(limits=c("", (t4 %>% arrange(desc(ratio)))$aa)) + 
+  scale_x_continuous(limits = c(-1.1, 1.1)) +
+  geom_abline(slope=0, intercept=1) +
+  xlab(expression(log2(freq))) +
+  ylab("aa, -1")
+
+ggsave("deltaptcntc_log2.pdf", g, height = 5.5, width = 4, useDingbats=FALSE)
+```
+
+```{r}
+tbl_clinvar <- readRDS("clinvar1_22.rds")
+t1 <- tbl_clinvar %>% filter(!(minus1 %in% c("TAA","TAG","TGA")), stop_s %in% c("TAA","TAG","TGA")) %>% group_by(minus1) %>% summarise(n = n()) %>% mutate(n = n/sum(n)) %>% left_join(last10, by = c("minus1" = "codon")) %>% group_by(aa) %>% summarize(n.x = sum(n.x), per = sum(per)) %>% mutate(ratio = n.x/per) %>% arrange(desc(ratio)) %>% na.omit()
+
+g <- ggplot(t1 %>% arrange(desc(ratio)), aes(y = aa, x = ratio, label = aa)) + 
+  geom_segment(aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t1 %>% filter(aa %in% c("G"))), aes(yend = aa, xend = 1, x = ifelse(ratio > 1.025, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t1 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=12,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete(limits=c("", (t1 %>% arrange(desc(ratio)))$aa)) + 
+  scale_x_continuous(limits = c(0.5, 1.5)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, -1 PTC") 
+
+g
+ggsave("ptc_clinvar_tall.pdf", height = 5.5, width = 4, useDingbats=FALSE)
+```
+
+```{r}
+# gnomad data for intronic and outofframe UAA
+tbl_othermut <- readRDS("freqlistout3gnomad_allptc")
+
+t1 <- tbl_othermut %>%
+  filter(!(m1stop %in% c("TAA","TAG","TGA")), 
+         conseq != "stop_gained", 
+         freq <= 0.01, 
+         stop %in% c("TAA","TAG","TGA")) %>% 
+  group_by(m1stop) %>%
+  summarise(n = sum(freq)) %>%
+  mutate(n = n/sum(n)) %>% 
+  left_join(last10, by = c("m1stop" = "codon")) %>% 
+  group_by(aa) %>% 
+  summarize(n.x = sum(n.x), per = sum(per)) %>% 
+  mutate(ratio = n.x/per) %>%  
+  arrange(desc(ratio))
+
+g <- ggplot(t1 %>% arrange(desc(ratio)), aes(y = aa, x = ratio, label = aa)) + 
+  geom_segment(aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t1 %>% filter(aa %in% c("G"))), aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t1 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=12,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete(limits=c("", (t1 %>% arrange(desc(ratio)))$aa)) + 
+  scale_x_continuous(limits = c(0, 2.2)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, -1 intronic and outofoframe stop") 
+
+ggsave("intron_outofframe_tall.pdf", g, height = 5.5, width = 4, useDingbats=FALSE)
+```
+
+```{r}
+# gnomad data for antisense
+tbl_anti <- readRDS("freqlistout3antignomad_allptc")
+
+t1 <- tbl_anti %>%
+  filter(!(m1stop %in% c("TAA","TAG","TGA")), 
+         conseq != "stop_gained", 
+         freq <= 0.01, 
+         stop %in% c("TAA","TAG","TGA")) %>% 
+  group_by(m1stop) %>%
+  summarise(n = sum(freq)) %>%
+  mutate(n = n/sum(n)) %>% 
+  left_join(last10, by = c("m1stop" = "codon")) %>% 
+  group_by(aa) %>% 
+  summarize(n.x = sum(n.x), per = sum(per)) %>% 
+  mutate(ratio = n.x/per) %>%  
+  arrange(desc(ratio))
+
+g <- ggplot(t1 %>% arrange(desc(ratio)), aes(y = aa, x = ratio, label = aa)) + 
+  geom_segment(aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t1 %>% filter(aa %in% c("G"))), aes(yend = aa, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t1 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=12,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete(limits=c("", (t1 %>% arrange(desc(ratio)))$aa)) + 
+  scale_x_continuous(limits = c(0, 2.2)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, -1 antisense stop") 
+
+ggsave("antisense_tall.pdf", g, height = 5.5, width = 4, useDingbats=FALSE)
+```
+
+```{r all10}
+library(BSgenome.Hsapiens.UCSC.hg38)
+get_rc <- function(strand, seq){
+  if(strand == "-1"){
+    seq <- chartr("ATGC","TACG", seq)
+    seq <- stringi::stri_reverse(seq)
+  }
+  seq
+} # faster than previous
+# 
+get_seq <- function(chrom, start, end, bsgenome = "BSgenome.Hsapiens.UCSC.hg38"){
+  bsgenome = eval(parse(text = bsgenome))
+  tryCatch({as.character(getSeq(bsgenome, as.character(chrom), start, end))}, error = function(err) {return("")})
+}
+# 
+center_stop35 <- function(tbl,stopcodon="TAA|TGA|TAG"){
+  tbl %>% mutate(stopsite2 = str_locate(substring(stop35alt, 34), stopcodon)[,1] + 33) %>% mutate(stop_s2 = str_sub(stop35alt, stopsite2, stopsite2 + 2), seq30 = str_sub(stop35alt, stopsite2 - 30, stopsite2 -1)) %>% filter(!is.na(seq30))
+}
+# 
+t30 <- full_pass %>% mutate(stop35 = pbmcapply::pbmcmapply(get_seq, chrom, pos - 35, pos + 35, mc.cores = 7)) %>% filter(stop35 != "") %>% mutate(stop35alt = paste(str_sub(stop35,1,35), alt, str_sub(stop35,36 + str_length(ref),71), sep = '')) %>% mutate(stop35alt = pbmcapply::pbmcmapply(get_rc, strand, stop35alt, mc.cores = 7)) %>% center_stop35()
+saveRDS(t30, "t30_121523.rds")
+```
+
+```{r 10freqptc}
+t30 <- readRDS("t30_121523.rds")
+
+t_per <- last10
+iterplot <- function(stop, t30, thres = 0.01){
+  freql = list()
+  for(n in 1:10){
+    varname <- as.character(n)
+    if (n == 10) {
+      freql[[n]] <- t30 %>% filter(!(minus1 %in% c("TAA","TAG","TGA")),
+       conseq == "stop_gained", stop_s %in% stop, popmax <= thres) %>% mutate(codon = str_sub(seq30, 3*n-2, 3*n)) %>% mutate(codon = minus1) %>% group_by(codon) %>% summarize(freq = sum(freq)) %>% 
+      # filter(!(codon %in% c("TAA","TAG","TGA"))) %>% 
+      mutate(!!varname := freq/sum(freq)) %>% select(-freq)
+    } else {
+      freql[[n]] <- t30 %>% filter(!(minus1 %in% c("TAA","TAG","TGA")),
+       conseq == "stop_gained", stop_s %in% stop, popmax <= thres) %>% mutate(codon = str_sub(seq30, 3*n-2, 3*n)) %>% group_by(codon) %>% summarize(freq = sum(freq)) %>% 
+      # filter(!(codon %in% c("TAA","TAG","TGA"))) %>% 
+      mutate(!!varname := freq/sum(freq)) %>% select(-freq)
+    }
+  }
+  
+  freq10 <- Reduce(function(df1,df2) full_join(df1,df2,by="codon"), freql)
+  
+  freq10norm <<- freq10 %>% left_join(t_per, by = "codon") %>% mutate_at(.vars = 2:11, .funs = funs(./per)) %>% select(-n)
+  
+  freq10aa <<- freq10 %>% left_join(t_per, by = "codon") %>% group_by(aa) %>% summarize_at(.vars = 2:13, .funs = sum) %>% mutate_at(.vars = 2:11, .funs = funs(./per)) %>% select(-n)
+}
+iterplot(c("TGA", "TAG", "TAA"), t30, 0.01)
+
+f4 <- freq10norm %>% select(-per, -aa) %>% tidyr::gather(-codon, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos))
+freq10norm_fil <- f4 %>% filter(codon %in% c("GGC","GGA","GGG","GGT"), pos == 10) %>% arrange(desc(ratio))
+levels <- (freq10norm_fil %>% arrange(desc(ratio)))$codon
+levels <- factor(levels, levels = levels)
+
+f5 <- freq10aa %>% select(-per) %>% tidyr::gather(-aa, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos))
+freq10aa_fil <- f5 %>% filter(aa %in% c("G"), pos == 10) %>% arrange(desc(ratio))
+
+g <- ggplot(freq10norm %>% select(-per, -aa) %>% tidyr::gather(-codon, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos)), aes(x = pos - 11, y = ratio, color = codon )) + theme_classic() + scale_x_discrete(limits=-10:-1) + scale_y_continuous(limits = c(0, 20), expand = c(0,0)) + geom_point() + theme(legend.position="none") + labs(x = "pos") + geom_point(data = freq10norm_fil, aes(x = pos - 11, y = ratio, color = "red")) + geom_text(data = freq10norm_fil, label = levels, nudge_x = 0.4) + labs(y = "freq fold change", x = "position, UAA ptc")
+
+g2 <- ggplot(freq10aa %>% select(-per) %>% tidyr::gather(-aa, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos)), aes(x = pos - 11, y = ratio, color = aa)) + theme_classic() + 
+    scale_x_discrete(limits=-10:-1) + 
+    scale_y_continuous(limits = c(0, 7.5), expand = c(0,0)) + labs(x = "pos") + geom_point() + geom_point(data = freq10aa_fil, aes(x = pos - 11, y = ratio, color = "red")) + geom_text(data = freq10aa_fil, label = "G", nudge_x = 0.2) + theme(legend.position="none") + labs(y = "freq fold change", x = "position, ptc")
+
+t1 <- freq10aa %>% select(-per) %>% tidyr::gather(-aa, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos) - 11) %>% group_by(pos) %>% arrange(desc(ratio)) %>% mutate(rank = dense_rank(-ratio) + 1)
+g <- ggplot(t1 %>% arrange(desc(ratio)), aes(y = rank, x = ratio, label = aa)) + 
+  facet_grid(.~pos) +
+  geom_segment(aes(yend = rank, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t1 %>% filter(aa %in% c("G"))), aes(yend = rank, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t1 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=12,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete() + 
+  scale_x_continuous(limits = c(0.5, 1.5)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, PTC") 
+
+ggsave("20231211_10codon_ptc_tall.pdf", g, height = 5.5, width = 40, useDingbats=FALSE)
+
+g2 <- ggplot(freq10aa %>% select(-per) %>% na.omit() %>% tidyr::gather(-aa, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos)), aes(x = pos - 11, y = ratio, color = aa)) + 
+  theme_classic() + 
+  scale_x_discrete(limits=-10:-1) + 
+  scale_y_continuous(limits = c(0.4, 1.6), expand = c(0,0)) + 
+  geom_point() + 
+  labs(x = "pos") +
+  geom_point(data = freq10aa_fil, aes(x = pos - 11, y = ratio, color = aa)) + 
+  geom_text(data = freq10aa_fil, label = "G", nudge_x = 0.2, show_guide = F, color = "black") +
+  #theme(legend.text = element_text(size = 4)) + 
+  guides(color = guide_legend(ncol = 2)) +
+  scale_color_viridis_d() +
+  labs(y = "freq fold change", x = "position")
+
+# ggsave(g, file = "10codon_norm.tiff", width = 5, height = 5, dpi = 200, scale = 1)
+ggsave(g2, file = "10aa_ptc_121523_color.pdf", width = 8, height = 4, dpi = 300, scale = 1)
+
+g3 <- ggplot(freq10aa %>% select(-per) %>% tidyr::gather(-aa, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos)) %>% mutate(aa2 = ifelse(aa == "G", "G", "notG")), aes(x = pos - 11, y = ratio, label = aa, color = aa2)) + 
+  theme_classic() + 
+  scale_x_discrete(limits=-10:-1) + 
+  scale_y_continuous(limits = c(0.5, 1.4), expand = c(0,0)) + 
+  geom_point() + 
+  ggrepel::geom_text_repel(max.overlaps = 100) +
+  labs(x = "pos") +
+  #geom_point(data = freq10naa_fil2, aes(x = pos - 11, y = ratio, color = "red")) + 
+  #geom_text(data = freq10naa_fil, label = "G", nudge_x = 0.2, show_guide = F, color = "black") +
+  #theme(legend.text = element_text(size = 4)) + 
+  #guides(color = guide_legend(ncol = 2)) +
+  scale_color_manual(values = c("red", "black")) +
+  theme(legend.position="none") +
+  labs(y = "freq fold change", x = "position")
+
+ggsave(g3, file = "10aa_ptc_022624_red.pdf", width = 12, height = 12, dpi = 300, scale = 1)
+
+pdf("heatmap_10aa_ptc_030424_rev.pdf", width = 7, height = 11.5)
+freq10aa %>% na.omit() %>% select(-per) %>% column_to_rownames("aa") %>% setNames(-10:-1) %>% 
+  ComplexHeatmap::Heatmap(
+    cluster_rows = F, cluster_columns = F,
+    col = circlize::colorRamp2(c(0.6, 1, 1.4), rev(c("#cf2f2e", "white", "#0726b9"))),
+    heatmap_legend_param = list(
+        title = "freq fold change"))
+dev.off()
+```
+
+```{r 10freqnorm}
+t30n <- tbl_stop_nonnmdiso_p
+
+get_seq <- function(chrom, start, end, bsgenome = "BSgenome.Hsapiens.1000genomes.hs37d5"){
+  bsgenome = eval(parse(text = bsgenome))
+  tryCatch({as.character(getSeq(bsgenome, as.character(chrom), start, end))}, error = function(err) {return("")})
+}
+
+get_rc <- function(strand, seq){
+  if(strand == "-"){
+    seq <- chartr("ATGC","TACG", seq)
+    seq <- stringi::stri_reverse(seq)
+  }
+  seq
+} # faster than previous
+# 
+seq_to_aa <- function(seq, fromnum = 1, tonum = 3){
+  as.character(translate(DNAString(str_sub(seq,fromnum,tonum))))
+}
+tbl_stops <- tbl_stop_nonnmdiso_p
+tbl_stops1 <- tbl_stops %>% mutate(seq = pbmcapply::pbmcmapply(get_seq, chrom, start = start + 1 - 30, end = end + 30, mc.cores = 7))
+tbl_stops2 <- tbl_stops1 %>% mutate(seq1 = pbmcapply::pbmcmapply(get_rc, strand, seq, mc.cores = 7)) %>% mutate(stop = str_sub(seq1, 31, 33), minus1 = str_sub(seq1, 28, 30), final10 = str_sub(seq1, 1, 30))
+tbl_stops3 <- tbl_stops2 %>% mutate(aa1 = pbmcapply::pbmcmapply(seq_to_aa, minus1, mc.cores = 7)) %>% mutate(aa10 = pbmcapply::pbmcmapply(seq_to_aa, final10, 1, 30, mc.cores = 7))
+tbl_stops4 <- tbl_stops3# %>% filter(str_length(minus1) == 3, stop %in% c("TAA","TGA","TAG"))
+saveRDS(tbl_stops3, "norm_stops121523")
+
+
+#relative frequencies of last 10 codons, normal stops
+tbl_stops3 <- readRDS("norm_stops121523")
+tbl_normal <- tbl_stops3
+freqln = list()
+for(n in 1:10){
+  varname <- as.character(n)
+  freqln[[n]] <- tbl_normal %>% mutate(codon = str_sub(final10, 3*n-2, 3*n)) %>% group_by(codon) %>% summarize(freq = n()) %>% filter(!(codon %in% c("TAA","TAG","TGA"))) %>% mutate(!!varname := freq/sum(freq)) %>% select(-freq)
+}
+
+freq10n <- Reduce(function(df1,df2) full_join(df1,df2,by="codon"), freqln)
+
+freq10nnorm <- freq10n %>% left_join(t_per, by = "codon") %>% mutate_at(.vars = 2:11, .funs = funs(./per)) %>% select(-n)
+f2 <- freq10nnorm %>% select(-per, -aa) %>% tidyr::gather(-codon, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos))
+freq10nnorm_fil <- f2 %>% filter(codon %in% c("GGC","GGA","GGG","GGT"), pos == 10) %>% arrange(desc(ratio))
+
+freq10naa <- freq10n %>% left_join(t_per, by = "codon") %>% group_by(aa) %>% summarize_at(.vars = 2:13, .funs = sum) %>% mutate_at(.vars = 2:11, .funs = funs(./per)) %>% select(-n)
+f3 <- freq10naa %>% select(-per) %>% tidyr::gather(-aa, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos))
+freq10naa_fil <- f3 %>% filter(aa %in% c("G"), pos == 10)
+freq10naa_fil2 <- f3 %>% filter(aa %in% c("G"))
+
+g <- ggplot(freq10nnorm %>% select(-per, -aa) %>% tidyr::gather(-codon, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos)), aes(x = pos - 11, y = ratio, color = codon)) + geom_point() + theme_classic() + scale_x_discrete(limits=-10:-1) + scale_y_continuous(limits = c(0.4, 1.6), expand = c(0,0)) + theme(legend.position="none") + labs(x = "pos") + geom_point(data = freq10nnorm_fil, aes(x = pos - 11, y = ratio, color = "red")) + geom_text(data = freq10nnorm_fil, label = (freq10nnorm_fil %>% arrange(desc(ratio)))$codon, nudge_x = 0.4) + labs(y = "freq fold change", x = "position")
+
+g2 <- ggplot(freq10naa %>% select(-per) %>% tidyr::gather(-aa, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos)), aes(x = pos - 11, y = ratio, color = aa)) + 
+  theme_classic() + 
+  scale_x_discrete(limits=-10:-1) + 
+  scale_y_continuous(limits = c(0.4, 1.6), expand = c(0,0)) + 
+  geom_point() + 
+  labs(x = "pos") +
+  geom_point(data = freq10naa_fil, aes(x = pos - 11, y = ratio, color = aa)) + 
+  geom_text(data = freq10naa_fil, label = "G", nudge_x = 0.2, show_guide = F, color = "black") +
+  #theme(legend.text = element_text(size = 4)) + 
+  guides(color = guide_legend(ncol = 2)) +
+  scale_color_viridis_d() +
+  labs(y = "freq fold change", x = "position")
+
+# ggsave(g, file = "10codon_norm.tiff", width = 5, height = 5, dpi = 200, scale = 1)
+ggsave(g2, file = "10aa_norm_121523_color.pdf", width = 8, height = 4, dpi = 300, scale = 1)
+
+g3 <- ggplot(freq10naa %>% select(-per) %>% tidyr::gather(-aa, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos)) %>% mutate(aa2 = ifelse(aa == "G", "G", "notG")), aes(x = pos - 11, y = ratio, label = aa, color = aa2)) + 
+  theme_classic() + 
+  scale_x_discrete(limits=-10:-1) + 
+  scale_y_continuous(limits = c(0.5, 1.4), expand = c(0,0)) + 
+  geom_point() + 
+  ggrepel::geom_text_repel(max.overlaps = 100) +
+  labs(x = "pos") +
+  #geom_point(data = freq10naa_fil2, aes(x = pos - 11, y = ratio, color = "red")) + 
+  #geom_text(data = freq10naa_fil, label = "G", nudge_x = 0.2, show_guide = F, color = "black") +
+  #theme(legend.text = element_text(size = 4)) + 
+  #guides(color = guide_legend(ncol = 2)) +
+  scale_color_manual(values = c("red", "black")) +
+  theme(legend.position="none") +
+  labs(y = "freq fold change", x = "position")
+
+ggsave(g3, file = "10aa_norm_022624_red.pdf", width = 12, height = 12, dpi = 300, scale = 1)
+
+t1 <- freq10naa %>% select(-per) %>% tidyr::gather(-aa, key = pos, value = ratio) %>% mutate(pos = as.numeric(pos) - 11) %>% group_by(pos) %>% arrange(desc(ratio)) %>% mutate(rank = dense_rank(-ratio) + 1)
+g <- ggplot(t1 %>% arrange(desc(ratio)), aes(y = rank, x = ratio, label = aa)) + 
+  facet_grid(.~pos) +
+  geom_segment(aes(yend = rank, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1)))) +
+  geom_segment(data =  (t1 %>% filter(aa %in% c("G"))), aes(yend = rank, xend = 1, x = ifelse(ratio > 1.01, ratio - 0.01, ifelse(ratio < 0.99, ratio + 0.01, 1))), color = "red") +
+  geom_point(size = 6, color = "white", alpha = 1) + 
+  geom_point(size = 6, color = "black", shape = 1) +
+  geom_text(size = 3.4) +
+  geom_text(data = (t1 %>% filter(aa %in% c("G"))),color = "red", size = 3.4) +
+  theme_minimal_vgrid() + 
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1, vjust=0.5), axis.text.y = element_text(size = 10), axis.title=element_text(size=12,face="bold")) + 
+  theme(axis.text.y=element_blank(), axis.ticks.y=element_blank()) +
+  scale_y_discrete() + 
+  scale_x_continuous(limits = c(0.5, 1.5)) +
+  geom_abline(slope=0, intercept=1) +
+  labs(x = "freq/overall_freq", y= "aa, NTC") 
+
+ggsave("20231211_10codon_ntc_tall.pdf", g, height = 5.5, width = 40, useDingbats=FALSE)
+
+pdf("heatmap_10aa_ntc_030424_cols.pdf", width = 7, height = 11.5)
+freq10naa %>% na.omit() %>% select(-per) %>% column_to_rownames("aa") %>% setNames(-10:-1) %>% 
+  ComplexHeatmap::Heatmap(
+    cluster_rows = F, cluster_columns = F,
+    col = circlize::colorRamp2(c(0.6, 1, 1.4), c("#cf2f2e", "white", "#0726b9")),
+    heatmap_legend_param = list(
+        title = "freq fold change"))
+dev.off()
+```
