@@ -1,0 +1,21 @@
+﻿Amino Acid,Hydropathy,Charge,"pKa, NH2","pKa, COOH",pK(R),Solubility
+Arg,hydrophilic,+,9.09,2.18,13.2,71.8
+Asn,hydrophilic,N,8.8,2.02,,2.4
+Asp,hydrophilic,-,9.6,1.88,3.65,0.42
+Glu,hydrophilic,-,9.67,2.19,4.25,0.72
+Gln,hydrophilic,N,9.13,2.17,,2.6
+Lys,hydrophilic,+,8.9,2.2,10.28,
+Ser,hydrophilic,N,9.15,2.21,,36.2
+Thr,hydrophilic,N,9.12,2.15,,freely
+Cys,moderate,N,10.78,1.71,8.33,freely
+His,moderate,+,8.97,1.78,6,4.19
+Met,moderate,N,9.21,2.28,,5.14
+Ala,hydrophobic,N,9.87,2.35,,15.8
+Val,hydrophobic,N,9.72,2.29,,5.6
+Gly,hydrophobic,N,9.6,2.34,,22.5
+Ile,hydrophobic,N,9.76,2.32,,3.36
+Leu,hydrophobic,N,9.6,2.36,,2.37
+Phe,hydrophobic,N,9.24,2.58,,2.7
+Pro,hydrophobic,N,10.6,1.99,,1.54
+Trp,hydrophobic,N,9.39,2.38,,1.06
+Tyr,hydrophobic,N,9.11,2.2,10.1,0.038
