@@ -1,0 +1,162 @@
+---
+title: "ase_analysis_topmed"
+output: html_document
+date: "2025-02-13"
+author: "Sujatha Jagannathan"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggpubr)
+```
+
+
+```{r}
+load("df.sub.simulations.RData")
+
+ggplot(df.sub.new.1, aes(x=Freq)) + geom_histogram() + scale_x_log10()
+
+bp <- ggplot(df.sub.new.1 %>% group_by(key) %>% filter(Freq > 200), aes(x = ALLELE.RAT)) + geom_histogram() + facet_wrap(~key) + theme_bw()
+
+ggsave(filename = "variable.allele.rat.pdf", device = "pdf", plot = bp)
+
+df.sub <- df.sub.new.1 %>% group_by(key) %>% mutate(ALLELE.RAT = median(ALLELE.RAT)) %>% unique()
+
+df.sub <- df.sub %>% select("gene",	"key",	"txnames","GENE_ID","gene_id",	"transcript_level",			"V2",	"refCount",	"altCount",	"totalCount",		"cds_length.x",	"cds_length.y",	"noncoding.length",	"threeUTR_length","gene_length","cds_exons","num_coding_exons",	"exon_count",	"NCexonsnum",	"downstream_start",		"fiveutrseqs.uORF",	"threeUTR.introns",	"coding.pos",	"mut.exon",	"length.mutated.exon",	"first.200",	"long.exon",	"PTC.2.EJC",	"PTC.2.end",	"PTC.2.start",	"last.exon",	"penultimate.exon",	"ALLELE.RAT",	"NMD.ESCAPEE",	"Freq",	"PTC.minus1.aa",	"PTC.minus2.aa",	"PTC.plus1.aa",	"PTC.plus2.aa",	"pLI",	"exac_pLI",	"pLI.cat",	"PTC.id",	"Glycine",	"last.EJC")
+
+str(df.sub)
+df.sub$PTC.2.end <- as.numeric(df.sub$PTC.2.end)
+df.sub <- df.sub %>% mutate(downstream.exons = num_coding_exons-mut.exon)
+
+
+### removing variants for which there are other stops in the PTC context
+ind <- which(df.sub$PTC.minus2.aa=='*' | df.sub$PTC.plus1.aa=='*' | df.sub$PTC.plus2.aa=='*' | df.sub$PTC.minus1.aa=='*')
+if(length(ind)>0){
+  ind.3 <- c(ind)
+  df.sub <- df.sub[-ind.3,]
+}
+
+#df.sub <- df.sub[complete.cases(df.sub), ]
+
+#add annotations
+df.sub$minus1gly <- rep('Not Glycine',nrow(df.sub))
+ind.1 <- which(df.sub$PTC.minus1.aa=='G')
+df.sub$minus1gly[ind.1] <- rep('Glycine',length(ind.1))
+
+df.sub$minus2gly <- rep('Not Glycine',nrow(df.sub))
+ind.1 <- which(df.sub$PTC.minus2.aa=='G')
+df.sub$minus2gly[ind.1] <- rep('Glycine',length(ind.1))
+
+df.sub$plus1gly <- rep('Not Glycine',nrow(df.sub))
+ind.1 <- which(df.sub$PTC.plus1.aa=='G')
+df.sub$plus1gly[ind.1] <- rep('Glycine',length(ind.1))
+
+df.sub$plus2gly <- rep('Not Glycine',nrow(df.sub))
+ind.1 <- which(df.sub$PTC.plus2.aa=='G')
+df.sub$plus2gly[ind.1] <- rep('Glycine',length(ind.1))
+
+# calling upstream and downstream
+exc.1 <- which(df.sub$last.exon=='lastexon')
+exc.2 <- which(df.sub$penultimate.exon=='penultimate.last50bp')
+
+df.sub$last.EJC <- rep('NA',nrow(df.sub))
+df.sub$last.EJC[-c(exc.1,exc.2)] <- 'upstream'
+df.sub$last.EJC[c(exc.1,exc.2)] <- 'downstream'
+
+
+### remove the outliers
+
+df.sub <- df.sub[which(df.sub$refCount>1),]
+
+table(with(df.sub, reorder(PTC.minus1.aa, ALLELE.RAT, median, order = TRUE)))
+
+### remove low representation aminoacids
+df.freq <- data.frame(table(df.sub$PTC.minus1.aa))
+cut.off <- quantile(df.freq$Freq,0.15)
+inc.AA <- df.freq[which(df.freq$Freq>cut.off),'Var1']
+df.sub <- df.sub[which(df.sub$PTC.minus1.aa%in%inc.AA),]
+
+table(with(df.sub, reorder(PTC.minus1.aa, ALLELE.RAT, median, order = TRUE)))
+
+### new Figure 2C 
+### when you get rare/common variants, there are 834 variants left
+fac <- with(df.sub, reorder(PTC.minus1.aa, ALLELE.RAT, median, order = TRUE))
+df.sub$PTC.minus1.aa <- factor(df.sub$PTC.minus1.aa, levels = levels(fac))
+colourCount = length(unique(df.sub$PTC.minus1.aa))
+
+
+bp <- ggboxplot(df.sub, x="PTC.minus1.aa", y="ALLELE.RAT", group="minus1gly",notch=FALSE, width=0.5,lwd=1,fill="minus1gly") + 
+  xlab('Amino Acid -1 to a PTC') + 
+  ylab ('Normalized NMD efficiency') +
+  scale_fill_manual(values = c('red','light gray')) + 
+  scale_color_manual(values = c('black')) +  
+  theme(legend.position="none",text=element_text(size = 15),axis.text.y=element_text(size = 12)) + 
+  coord_flip() + 
+  ggtitle ('All variants') 
+
+bp
+
+ggsave(filename = "2C.pdf", device = "pdf", plot = bp)
+
+
+### new Figure 2D for plus1
+
+fac <- with(df.sub, reorder(PTC.plus1.aa, ALLELE.RAT, median, order = TRUE))
+df.sub$PTC.plus1.aa <- factor(df.sub$PTC.plus1.aa, levels = levels(fac))
+colourCount = length(unique(df.sub$PTC.plus1.aa))
+
+bp <- ggboxplot(df.sub, x="PTC.plus1.aa", y="ALLELE.RAT", group="plus1gly",notch=FALSE, width=0.5,lwd=1,fill="plus1gly") + 
+  xlab('Amino Acid +1 to a PTC') + 
+  ylab ('Normalized NMD efficiency') +
+  scale_fill_manual(values = c('red','light gray')) + 
+  scale_color_manual(values = c('black')) +  
+  theme(legend.position="none",text=element_text(size = 15),axis.text.y=element_text(size = 12)) + 
+  coord_flip() + 
+  ggtitle ('All variants')
+
+bp
+
+ggsave(filename = "2D.pdf", device = "pdf", plot = bp)
+
+
+### Subgroup analysis (downstream ones)
+
+df.sub.1 <- df.sub[which(df.sub$last.EJC=='downstream'),]
+fac <- with(df.sub.1, reorder(PTC.minus1.aa, ALLELE.RAT, median, order = TRUE))
+df.sub.1$PTC.minus1.aa <- factor(df.sub.1$PTC.minus1.aa, levels = levels(fac))
+colourCount = length(unique(df.sub$PTC.minus1.aa))
+
+df.sub.1$Glycine <- rep('Not Glycine',nrow(df.sub.1))
+ind.1 <- which(df.sub.1$PTC.minus1.aa=='G')
+df.sub.1$Glycine[ind.1] <- rep('Glycine',length(ind.1))
+
+bp <- ggboxplot(df.sub.1, x="PTC.minus1.aa", y="ALLELE.RAT", group="Glycine",notch=FALSE, width=0.5,lwd=1,fill="Glycine") + xlab('Amino Acid -2 to a PTC') + ylab ('Normalized NMD efficiency')
+bp <- bp +scale_fill_manual(values = c('red','light gray')) + scale_color_manual(values = c('black'))
+bp <- bp+  theme(legend.position="none",text=element_text(size = 15),axis.text.y=element_text(size = 12)) + coord_flip() + ggtitle ('Downstream of EJC') 
+
+bp
+
+ggsave(filename = "2E.pdf", device = "pdf", plot = bp)
+
+### Subgroup analysis (upstream ones)
+
+df.sub.1 <- df.sub[which(df.sub$last.EJC=='upstream'),]
+fac <- with(df.sub.1, reorder(PTC.minus1.aa, ALLELE.RAT, median, order = TRUE))
+df.sub.1$PTC.minus1.aa <- factor(df.sub.1$PTC.minus1.aa, levels = levels(fac))
+colourCount = length(unique(df.sub.1$PTC.minus1.aa))
+
+df.sub.1$Glycine <- rep('Not Glycine',nrow(df.sub.1))
+ind.1 <- which(df.sub.1$PTC.minus1.aa=='G')
+df.sub.1$Glycine[ind.1] <- rep('Glycine',length(ind.1))
+
+bp <- ggboxplot(df.sub.1, x="PTC.minus1.aa", y="ALLELE.RAT", group="Glycine",notch=FALSE, width=0.5,lwd=1,fill="Glycine") + xlab('Amino Acid -2 to a PTC') + ylab ('Normalized NMD efficiency')
+bp <- bp +scale_fill_manual(values = c('red','light gray')) + scale_color_manual(values = c('black'))
+bp <- bp+  theme(legend.position="none",text=element_text(size = 15),axis.text.y=element_text(size = 12)) + coord_flip() + ggtitle ('Upstream of EJC') 
+
+bp
+
+ggsave(filename = "2F.pdf", device = "pdf", plot = bp)
+
+```
+
