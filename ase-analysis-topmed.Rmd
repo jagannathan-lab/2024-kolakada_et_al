@@ -13,22 +13,7 @@ library(ggpubr)
 
 
 ```{r}
-load("df.sub.simulations.RData")
-
-ggplot(df.sub.new.1, aes(x=Freq)) + geom_histogram() + scale_x_log10()
-
-bp <- ggplot(df.sub.new.1 %>% group_by(key) %>% filter(Freq > 200), aes(x = ALLELE.RAT)) + geom_histogram() + facet_wrap(~key) + theme_bw()
-
-ggsave(filename = "variable.allele.rat.pdf", device = "pdf", plot = bp)
-
-df.sub <- df.sub.new.1 %>% group_by(key) %>% mutate(ALLELE.RAT = median(ALLELE.RAT)) %>% unique()
-
-df.sub <- df.sub %>% select("gene",	"key",	"txnames","GENE_ID","gene_id",	"transcript_level",			"V2",	"refCount",	"altCount",	"totalCount",		"cds_length.x",	"cds_length.y",	"noncoding.length",	"threeUTR_length","gene_length","cds_exons","num_coding_exons",	"exon_count",	"NCexonsnum",	"downstream_start",		"fiveutrseqs.uORF",	"threeUTR.introns",	"coding.pos",	"mut.exon",	"length.mutated.exon",	"first.200",	"long.exon",	"PTC.2.EJC",	"PTC.2.end",	"PTC.2.start",	"last.exon",	"penultimate.exon",	"ALLELE.RAT",	"NMD.ESCAPEE",	"Freq",	"PTC.minus1.aa",	"PTC.minus2.aa",	"PTC.plus1.aa",	"PTC.plus2.aa",	"pLI",	"exac_pLI",	"pLI.cat",	"PTC.id",	"Glycine",	"last.EJC")
-
-str(df.sub)
-df.sub$PTC.2.end <- as.numeric(df.sub$PTC.2.end)
-df.sub <- df.sub %>% mutate(downstream.exons = num_coding_exons-mut.exon)
-
+load("df.sub.RData")
 
 ### removing variants for which there are other stops in the PTC context
 ind <- which(df.sub$PTC.minus2.aa=='*' | df.sub$PTC.plus1.aa=='*' | df.sub$PTC.plus2.aa=='*' | df.sub$PTC.minus1.aa=='*')
